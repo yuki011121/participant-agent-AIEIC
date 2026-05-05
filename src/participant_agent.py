@@ -97,6 +97,7 @@ Return ONLY valid JSON, no other text."""
         session_id: str,
         message: str,
         response_time_ms: Optional[int] = None,
+        feedback_score: Optional[str] = None,
     ) -> str:
         """
         Log a student interaction to Cosmos DB.
@@ -119,6 +120,7 @@ Return ONLY valid JSON, no other text."""
             "response_time_ms": response_time_ms or 0,
             # lab_id enables cross-lab analytics by Reflection Agent (future)
             "lab_id": os.getenv("LAB_ID", "default-lab"),
+            "feedback_score": feedback_score
         }
 
         container = self._get_container_client()
