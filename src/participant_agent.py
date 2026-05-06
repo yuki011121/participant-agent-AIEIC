@@ -63,7 +63,7 @@ class ParticipantAgent:
     async def classify_question(self, message: str) -> dict:
         """
         Classify a student question using LLM.
-        Returns: question_type, hint_level, difficulty
+        Returns: question_type, hint_level, difficulty, classification_confidence
         """
         client = self._get_openai_client()
         deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4")
@@ -76,6 +76,7 @@ Return a JSON object with:
 - question_type: one of "debugging", "concept", "setup", "other"
 - hint_level: 1 (simple hint needed), 2 (explain error), 3 (point to docs)
 - difficulty: one of "low", "medium", "high"
+- classification_confidence: number from 0.0 to 1.0 representing confidence in this classification
 
 Return ONLY valid JSON, no other text."""
 
@@ -84,12 +85,12 @@ Return ONLY valid JSON, no other text."""
                 model=deployment,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=100,
+                max_tokens=125,
             )
             import json
             return json.loads(response.choices[0].message.content)
         except Exception:
-            return {"question_type": "other", "hint_level": 1, "difficulty": "medium"}
+            return {"question_type": "other", "hint_level": 1, "difficulty": "medium", "classification_confidence": 0.0}
 
     async def log_interaction(
         self,
@@ -117,10 +118,12 @@ Return ONLY valid JSON, no other text."""
             "question_type": classification.get("question_type", "other"),
             "hint_level": classification.get("hint_level", 1),
             "difficulty": classification.get("difficulty", "medium"),
+            "classification_confidence": classification.get("classification_confidence", 0.0),
             "response_time_ms": response_time_ms or 0,
             # lab_id enables cross-lab analytics by Reflection Agent (future)
             "lab_id": os.getenv("LAB_ID", "default-lab"),
             "feedback_score": feedback_score
+
         }
 
         container = self._get_container_client()
