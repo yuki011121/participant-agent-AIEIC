@@ -170,6 +170,94 @@ Write a helpful, actionable summary that tells the tutor how to best support thi
                 summary += "Often understands with minimal hints."
             return summary
 
+    def _determine_status(self, total_questions: int, avg_hint: float, type_counts: dict) -> str:
+        """Classify a student into StudentStatus based on interaction patterns."""
+        if total_questions == 0:
+            return "inactive"
+        if avg_hint >= 2.5:
+            return "flagged"
+        total = sum(type_counts.values()) or 1
+        debugging_ratio = type_counts.get("debugging", 0) / total
+        if avg_hint >= 1.8 or (debugging_ratio >= 0.7 and avg_hint > 1.3):
+            return "needs_help"
+        return "on_track"
+
+    async def get_student_status(self, student_id: str) -> str:
+        """
+        Return on_track / needs_help / flagged / inactive for a single student.
+        Delegates to get_student_context so all analytics stay consistent.
+        """
+        context = await self.get_student_context(student_id)
+        return self._determine_status(
+            total_questions=context["total_questions"],
+            avg_hint=context["avg_hint_level"],
+            type_counts=context["question_type_distribution"],
+        )
+
+    async def get_cohort_context(self, lab_id: str) -> dict:
+        """
+        Batch aggregation for all students in a lab.
+        Requires a cross-partition Cosmos query (partitioned by student_id).
+        """
+        container = self._get_container_client()
+
+        items = list(
+            container.query_items(
+                query="SELECT * FROM c WHERE c.lab_id = @lab_id",
+                parameters=[{"name": "@lab_id", "value": lab_id}],
+                enable_cross_partition_query=True,
+            )
+        )
+
+        # Group interactions by student
+        by_student: dict = {}
+        for item in items:
+            sid = item["student_id"]
+            by_student.setdefault(sid, []).append(item)
+
+        student_summaries = []
+        total_prompts = len(items)
+        hint_distribution: dict = {}
+
+        for student_id, interactions in by_student.items():
+            type_counts: dict = {}
+            hint_levels: list = []
+
+            for item in interactions:
+                q_type = item.get("question_type", "other")
+                type_counts[q_type] = type_counts.get(q_type, 0) + 1
+                hint = item.get("hint_level", 1)
+                hint_levels.append(hint)
+                key = str(hint)
+                hint_distribution[key] = hint_distribution.get(key, 0) + 1
+
+            avg_hint = sum(hint_levels) / len(hint_levels) if hint_levels else 0.0
+            top_topic = max(type_counts, key=type_counts.get) if type_counts else "unknown"
+
+            sorted_interactions = sorted(interactions, key=lambda x: x.get("timestamp", ""))
+            last_message = sorted_interactions[-1].get("message", "") if sorted_interactions else ""
+
+            status = self._determine_status(len(interactions), avg_hint, type_counts)
+
+            student_summaries.append({
+                "student_id": student_id,
+                "total_questions": len(interactions),
+                "top_topic": top_topic,
+                "avg_hint_level": round(avg_hint, 2),
+                "status": status,
+                "last_message": last_message[:200],
+            })
+
+        avg_per_student = total_prompts / len(by_student) if by_student else 0.0
+
+        return {
+            "lab_id": lab_id,
+            "students": student_summaries,
+            "total_prompts": total_prompts,
+            "avg_per_student": round(avg_per_student, 1),
+            "hint_distribution": hint_distribution,
+        }
+
     async def get_student_context(self, student_id: str) -> dict:
         """
         Retrieve aggregated context for a student.
