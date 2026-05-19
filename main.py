@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Literal, Optional
 from enum import Enum
 import uuid
 import os
@@ -65,6 +65,7 @@ class LogInteractionRequest(BaseModel):
     session_id: str
     message: str
     response_time_ms: Optional[int] = None
+    feedback_score: Optional[Literal["up","down"]] = None  # "up", "down"
 
 
 class LogInteractionResponse(BaseModel):
@@ -177,7 +178,8 @@ async def log_interaction(request: LogInteractionRequest):
             student_id=request.student_id,
             session_id=request.session_id,
             message=request.message,
-            response_time_ms=request.response_time_ms
+            response_time_ms=request.response_time_ms,
+            feedback_score=request.feedback_score
         )
         logger.info(f"Interaction logged: {interaction_id}")
         return LogInteractionResponse(status="ok", interaction_id=interaction_id)
