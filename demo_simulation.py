@@ -27,12 +27,12 @@ SESSION_2 = str(uuid.uuid4())
 
 INTERACTIONS = [
     # Session 1: Alice struggles with pointers
-    {"session_id": SESSION_1, "message": "What is a pointer in C?", "response_time_ms": 1800},
-    {"session_id": SESSION_1, "message": "I don't understand pointer arithmetic, can you give me a hint?", "response_time_ms": 2200},
+    {"session_id": SESSION_1, "message": "What is a pointer in C?", "response_time_ms": 1800, "feedback_score": "up"},
+    {"session_id": SESSION_1, "message": "I don't understand pointer arithmetic, can you give me a hint?", "response_time_ms": 2200, "feedback_score": "up"},
     {"session_id": SESSION_1, "message": "Why does my program segfault when I dereference this pointer?", "response_time_ms": 3100},
     {"session_id": SESSION_1, "message": "How do I allocate memory with malloc?", "response_time_ms": 1500},
     # Session 2: Alice moves on to data structures, still asks for hints
-    {"session_id": SESSION_2, "message": "How do I implement a linked list in C?", "response_time_ms": 2000},
+    {"session_id": SESSION_2, "message": "How do I implement a linked list in C?", "response_time_ms": 2000, "feedback_score": "down"},
     {"session_id": SESSION_2, "message": "Can you give me a hint for reversing a linked list?", "response_time_ms": 2800},
     {"session_id": SESSION_2, "message": "What is the time complexity of searching a linked list?", "response_time_ms": 1200},
 ]
@@ -69,9 +69,16 @@ async def run_demo(base_url: str):
                 "message": interaction["message"],
                 "response_time_ms": interaction["response_time_ms"],
             }
+            if "feedback_score" in interaction:
+                payload["feedback_score"] = interaction["feedback_score"]
+                
             r = await client.post(f"{base_url}/participant/log", json=payload)
             result = r.json()
             status = "✓" if r.status_code == 200 else "✗"
+            print(
+                f"  [{i}/{len(INTERACTIONS)}] {status} "
+                f"status={r.status_code} feedback={interaction.get('feedback_score', 'omitted')}"
+            )
             print(f"  [{i}/{len(INTERACTIONS)}] {status} \"{interaction['message'][:55]}...\""
                   if len(interaction['message']) > 55
                   else f"  [{i}/{len(INTERACTIONS)}] {status} \"{interaction['message']}\"")

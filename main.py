@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Literal, Optional
 import os
 import logging
 from dotenv import load_dotenv
@@ -61,6 +61,7 @@ class LogInteractionRequest(BaseModel):
     session_id: str
     message: str
     response_time_ms: Optional[int] = None
+    feedback_score: Optional[Literal["up","down"]] = None  # "up", "down"
 
 
 class LogInteractionResponse(BaseModel):
@@ -104,7 +105,8 @@ async def log_interaction(request: LogInteractionRequest):
             student_id=request.student_id,
             session_id=request.session_id,
             message=request.message,
-            response_time_ms=request.response_time_ms
+            response_time_ms=request.response_time_ms,
+            feedback_score=request.feedback_score
         )
         logger.info(f"Interaction logged: {interaction_id}")
         return LogInteractionResponse(status="ok", interaction_id=interaction_id)
