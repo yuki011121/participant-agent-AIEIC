@@ -76,6 +76,25 @@ class StudentContextResponse(BaseModel):
     sessions_count: int
     avg_questions_per_session: float
     session_help_frequency: dict
+    escalation_flag: bool = False
+    escalated_types: list[str] = []
+    summary: str
+
+class TrajectoryResponse(BaseModel):
+    student_id: str
+    trend: Literal["increasing", "stable", "decreasing"]
+    sample_size: int
+    difficulty_sequence: list[str]
+
+class SessionEndRequest(BaseModel):
+    student_id: str
+    session_id: str
+
+
+class SessionEndResponse(BaseModel):
+    status: str
+    session_id: str
+    total_interactions: int
     summary: str
 
 
@@ -127,6 +146,35 @@ async def get_student_context(student_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/participant/trajectory/{student_id}", response_model=TrajectoryResponse)
+async def get_trajectory(student_id: str):
+    """
+    Get difficulty trend for a student.
+    Returns increasing / stable / decreasing based on recent interaction history.
+    """
+    try:
+        result = await agent.get_difficulty_trajectory(student_id)
+        return TrajectoryResponse(**result)
+    except Exception as e:
+        logger.error(f"Error getting trajectory for {student_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/participant/session/end", response_model=SessionEndResponse)
+async def end_session(request: SessionEndRequest):
+    """
+    End a student session and write a summary to Cosmos DB.
+    Triggered on logout by Lab Companion.
+    """
+    try:
+        logger.info(f"Ending session {request.session_id} for student {request.student_id}")
+        result = await agent.end_session(
+            student_id=request.student_id,
+            session_id=request.session_id,
+        )
+        return SessionEndResponse(**result)
+    except Exception as e:
+        logger.error(f"Error ending session {request.session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============ Run Server ============
 
