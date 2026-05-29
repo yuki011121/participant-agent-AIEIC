@@ -92,6 +92,32 @@ async def run_demo(base_url: str):
         context = r.json()
         print_json(context)
 
+        # ── Step 3b: Trajectory ───────────────────────────────────
+        print_section("Step 3b: Difficulty trajectory")
+        print(f"GET /participant/trajectory/{STUDENT_ID}\n")
+
+        r = await client.get(f"{base_url}/participant/trajectory/{STUDENT_ID}")
+        print_json(r.json())
+
+        # ── Step 3c: End session 1 ────────────────────────────────
+        print_section("Step 3c: End session (logout)")
+        payload = {"student_id": STUDENT_ID, "session_id": SESSION_1}
+        print(f"POST /participant/session/end  session={SESSION_1[:8]}...\n")
+
+        r = await client.post(f"{base_url}/participant/session/end", json=payload)
+        print_json(r.json())
+
+        # ── Step 3d: Context again — total_questions must be unchanged ──
+        print_section("Step 3d: Context after session end (summary doc must be filtered out)")
+        r = await client.get(f"{base_url}/participant/context/{STUDENT_ID}")
+        context_after = r.json()
+        assert context_after["total_questions"] == context["total_questions"], \
+            f"BUG: total_questions changed after session end! {context['total_questions']} → {context_after['total_questions']}"
+        print(f"✓ total_questions unchanged: {context_after['total_questions']}")
+        print(f"  escalation_flag : {context_after['escalation_flag']}")
+        print(f"  escalated_types : {context_after['escalated_types']}")
+
+
         # ── Step 4: Show how Lab Companion would use this ─────────
         print_section("Step 4: How Lab Companion uses the context (demo)")
         print("Lab Companion system prompt would be augmented with:\n")
