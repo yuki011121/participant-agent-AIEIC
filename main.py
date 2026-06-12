@@ -6,7 +6,7 @@ Author: Yayun
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Literal, Optional
@@ -94,24 +94,25 @@ async def health_check():
 
 
 @app.post("/participant/log", response_model=LogInteractionResponse)
-async def log_interaction(request: LogInteractionRequest):
-    """
-    Log a student interaction
-    Called by Lab Companion after every message is processed
-    """
+async def log_interaction(request: LogInteractionRequest, background_tasks: BackgroundTasks):
+    """Classify + build the doc, then kick the Cosmos write to a background task."""
     try:
         logger.info(f"Logging interaction for student: {request.student_id}")
-        interaction_id = await agent.log_interaction(
+        item = await agent.build_interaction_record(
             student_id=request.student_id,
             session_id=request.session_id,
             message=request.message,
             response_time_ms=request.response_time_ms,
-            feedback_score=request.feedback_score
+            feedback_score=request.feedback_score,
         )
-        logger.info(f"Interaction logged: {interaction_id}")
-        return LogInteractionResponse(status="ok", interaction_id=interaction_id)
+
+        # write happens after we respond - don't need to wait on cosmos here
+        background_tasks.add_task(agent.save_interaction, item)
+
+        logger.info(f"Interaction queued for write: {item['id']}")
+        return LogInteractionResponse(status="ok", interaction_id=item["id"])
     except Exception as e:
-        logger.error(f"Error logging interaction: {e}")
+        logger.error(f"Error logging interaction for {request.student_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

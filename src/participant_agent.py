@@ -7,12 +7,18 @@ Storage: Azure Cosmos DB (NoSQL API, Serverless)
   - Container: interactions  (partitionKey: /student_id)
 """
 
+import json
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 from azure.cosmos import CosmosClient, PartitionKey
 from openai import AzureOpenAI
+try:
+    import redis
+    _REDIS_AVAILABLE = True
+except ImportError:
+    _REDIS_AVAILABLE = False
 
 
 class ParticipantAgent:
@@ -24,9 +30,13 @@ class ParticipantAgent:
     DATABASE_NAME = "aieic-lab"
     CONTAINER_NAME = "interactions"
 
+    CONTEXT_CACHE_TTL = 300  # 5 minutes
+    CONTEXT_CACHE_KEY = "student_context:{student_id}"
+
     def __init__(self):
         self._container_client = None
         self._openai_client = None
+        self._redis_client = None
 
     def _get_container_client(self):
         """Lazy initialization of Cosmos DB container client."""
@@ -49,6 +59,17 @@ class ParticipantAgent:
             )
 
         return self._container_client
+
+    def _get_redis_client(self):
+        """Returns a redis client if REDIS_URL is set, otherwise None."""
+        if not _REDIS_AVAILABLE:
+            return None
+        if self._redis_client is None:
+            url = os.getenv("REDIS_URL")
+            if not url:
+                return None
+            self._redis_client = redis.from_url(url, decode_responses=True)
+        return self._redis_client
 
     def _get_openai_client(self):
         """Lazy initialization of Azure OpenAI client."""
@@ -92,26 +113,23 @@ Return ONLY valid JSON, no other text."""
         except Exception:
             return {"question_type": "other", "hint_level": 1, "difficulty": "medium", "classification_confidence": 0.0}
 
-    async def log_interaction(
+    async def build_interaction_record(
         self,
         student_id: str,
         session_id: str,
         message: str,
         response_time_ms: Optional[int] = None,
         feedback_score: Optional[str] = None,
-    ) -> str:
-        """
-        Log a student interaction to Cosmos DB.
-        Returns: interaction_id
-        """
+    ) -> dict:
+        """Builds the interaction doc without writing it — write is handled separately."""
         classification = await self.classify_question(message)
         interaction_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
 
-        # Cosmos DB document — id + partitionKey (/student_id) are required
+        # doc shape hasn't changed, just moved the write out
         item = {
-            "id": interaction_id,                          # Cosmos DB document id
-            "student_id": student_id,                      # partition key
+            "id": interaction_id,
+            "student_id": student_id,
             "session_id": session_id,
             "timestamp": timestamp,
             "message": message[:500],
@@ -120,16 +138,40 @@ Return ONLY valid JSON, no other text."""
             "difficulty": classification.get("difficulty", "medium"),
             "classification_confidence": classification.get("classification_confidence", 0.0),
             "response_time_ms": response_time_ms or 0,
-            # lab_id enables cross-lab analytics by Reflection Agent (future)
             "lab_id": os.getenv("LAB_ID", "default-lab"),
-            "feedback_score": feedback_score
-
+            "feedback_score": feedback_score,
         }
 
-        container = self._get_container_client()
-        container.upsert_item(item)
+        return item
 
-        return interaction_id
+    def save_interaction(self, item: dict) -> None:
+        """Writes the interaction to Cosmos. Sync so BackgroundTasks can run it in a threadpool."""
+        import logging
+        logger = logging.getLogger(__name__)
+        try:
+            container = self._get_container_client()
+            container.upsert_item(item)
+        except Exception as e:
+            logger.error(f"background write failed for {item.get('id')}: {e}")
+
+    async def log_interaction(
+        self,
+        student_id: str,
+        session_id: str,
+        message: str,
+        response_time_ms: Optional[int] = None,
+        feedback_score: Optional[str] = None,
+    ) -> str:
+        """Synchronous classify + write in one shot. Kept for demo_simulation.py and direct callers."""
+        item = await self.build_interaction_record(
+            student_id=student_id,
+            session_id=session_id,
+            message=message,
+            response_time_ms=response_time_ms,
+            feedback_score=feedback_score,
+        )
+        self.save_interaction(item)
+        return item["id"]
 
     async def _generate_summary(
         self,
@@ -177,12 +219,23 @@ Write a helpful, actionable summary that tells the tutor how to best support thi
 
     async def get_student_context(self, student_id: str) -> dict:
         """
-        Retrieve aggregated context for a student.
-        Used by Lab Companion to personalize its system prompt.
-
-        Uses partition_key routing so only the student's partition is scanned —
-        efficient regardless of total data volume.
+        Returns aggregated context for a student.
+        Checks Redis first (5-min TTL), falls back to Cosmos if not cached.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        cache_key = self.CONTEXT_CACHE_KEY.format(student_id=student_id)
+
+        # cache hit — skip the cosmos query and llm call
+        try:
+            r = self._get_redis_client()
+            if r:
+                cached = r.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+        except Exception as e:
+            logger.warning(f"Redis read failed, falling back to Cosmos: {e}")
+
         container = self._get_container_client()
 
         # Parameterized query — no string interpolation, safe against injection
@@ -231,7 +284,7 @@ Write a helpful, actionable summary that tells the tutor how to best support thi
             primary_type=primary_type,
         )
 
-        return {
+        result = {
             "total_questions": total,
             "question_type_distribution": type_counts,
             "avg_hint_level": round(avg_hint, 2),
@@ -240,3 +293,13 @@ Write a helpful, actionable summary that tells the tutor how to best support thi
             "session_help_frequency": session_counts,
             "summary": summary,
         }
+
+        # caching in case of redis failure
+        try:
+            r = self._get_redis_client()
+            if r:
+                r.setex(cache_key, self.CONTEXT_CACHE_TTL, json.dumps(result))
+        except Exception as e:
+            logger.warning(f"Redis write failed, result not cached: {e}")
+
+        return result
