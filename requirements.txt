@@ -1,6 +1,7 @@
 # Azure Services
 azure-cosmos>=4.5.0
 azure-identity>=1.15.0
+redis>=5.0.0
 
 # Web Framework
 fastapi>=0.109.0
